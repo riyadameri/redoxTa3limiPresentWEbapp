@@ -1,0 +1,6 @@
+{
+  "name": "Redox Ta3limi - نظام إدارة المدارس المتكامل",
+  "description": "الموقع التعريفي ونظام الاشتراكات السحابي لبرنامج Redox Ta3limi لإدارة المدارس، الحسابات، وتقنية RFID",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

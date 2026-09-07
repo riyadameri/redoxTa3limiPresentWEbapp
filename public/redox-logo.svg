@@ -1,0 +1,55 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 500 500" fill="none">
+  <defs>
+    <linearGradient id="redoxGrad" x1="0%" y1="0%" x2="100%" y2="80%">
+      <stop offset="0%" stop-color="#FBA41A" />
+      <stop offset="35%" stop-color="#F76B1C" />
+      <stop offset="70%" stop-color="#F04826" />
+      <stop offset="100%" stop-color="#DE2929" />
+    </linearGradient>
+  </defs>
+
+  <!-- Top loop with orange-to-red gradient -->
+  <path
+    d="M 175 140
+       C 175 125, 188 112, 205 112
+       L 275 112
+       C 335 112, 385 160, 385 220
+       C 385 272, 345 315, 295 322
+       C 265 300, 240 265, 230 240
+       C 260 235, 295 210, 295 178
+       C 295 158, 280 148, 260 148
+       L 205 148
+       C 188 148, 175 140, 175 140 Z"
+    fill="url(#redoxGrad)"
+  />
+
+  <!-- Left middle horizontal tab in navy -->
+  <path
+    d="M 170 205
+       C 170 192, 180 182, 195 182
+       L 245 182
+       C 255 182, 262 192, 260 205
+       C 258 218, 250 226, 238 226
+       L 195 226
+       C 180 226, 170 218, 170 205 Z"
+    fill="#0B203E"
+  />
+
+  <!-- Bottom navy arch and legs -->
+  <path
+    d="M 175 320
+       C 175 255, 215 220, 265 220
+       C 285 220, 310 240, 335 280
+       L 375 348
+       C 388 368, 380 388, 360 388
+       C 345 388, 332 375, 320 355
+       L 290 305
+       C 278 285, 265 275, 252 275
+       C 235 275, 222 290, 222 315
+       L 222 360
+       C 222 375, 210 385, 195 385
+       C 180 385, 175 372, 175 355
+       Z"
+    fill="#0B203E"
+  />
+</svg>
