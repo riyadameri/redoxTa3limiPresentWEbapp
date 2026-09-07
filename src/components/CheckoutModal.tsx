@@ -16,12 +16,16 @@ import {
   ShieldCheck, 
   KeyRound,
   ExternalLink,
-  Printer
+  Printer,
+  Eye,
+  Clock,
+  RefreshCw,
+  MessageSquare
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
 import { ALGERIA_WILAYAS } from '../data/plans';
 import { BillingCycle, PaymentMethod, Plan, SchoolOrder, SchoolType } from '../types';
-import { saveNewOrder } from '../utils/orderStorage';
+import { createOrderAsync } from '../utils/orderStorage';
 import { RedoxLogo } from './RedoxLogo';
 
 interface CheckoutModalProps {
@@ -53,17 +57,53 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
   const [email, setEmail] = useState('');
   const [studentCount, setStudentCount] = useState<number>(plan.studentLimit);
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('baridimob');
+  const [adminUsername, setAdminUsername] = useState('');
+  const [adminPassword, setAdminPassword] = useState('');
   const [notes, setNotes] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [createdOrder, setCreatedOrder] = useState<SchoolOrder | null>(null);
   const [copiedKey, setCopiedKey] = useState(false);
+  const [emailStatus, setEmailStatus] = useState<{ sent: boolean; messageId?: string; error?: string } | null>(null);
+  const [isResendingEmail, setIsResendingEmail] = useState(false);
+  const [resendFeedback, setResendFeedback] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+
+  const handleResendEmail = async () => {
+    if (!createdOrder) return;
+    setIsResendingEmail(true);
+    setResendFeedback(null);
+    try {
+      const res = await fetch(`/api/orders/${createdOrder.id}/send-email`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' }
+      });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        setResendFeedback({
+          type: 'success',
+          text: `✓ تم إرسال رسالة التأكيد مجدداً بنجاح إلى ${createdOrder.email}. يرجى فحص صندوق الوارد أو مجلد Spam.`
+        });
+      } else {
+        setResendFeedback({
+          type: 'error',
+          text: data.message || 'تعذر إعادة إرسال البريد حالياً. يمكنك التواصل معنا مباشرة.'
+        });
+      }
+    } catch (e: any) {
+      setResendFeedback({
+        type: 'error',
+        text: 'حدث خطأ في الاتصال بالخادم. يرجى التواصل عبر الواتساب لتأكيد طلبك.'
+      });
+    } finally {
+      setIsResendingEmail(false);
+    }
+  };
 
   if (!isOpen) return null;
 
   const currentPriceCentimes = billingCycle === 'yearly' ? plan.yearlyCentimes : plan.monthlyCentimes;
   const currentPriceDzd = billingCycle === 'yearly' ? plan.yearlyDzd : plan.monthlyDzd;
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!schoolName || !phone || !email || !directorName) {
       alert('يرجى ملء جميع الحقول الإلزامية لتأكيد التسجيل.');
@@ -71,41 +111,47 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
     }
 
     setIsSubmitting(true);
+    setEmailStatus(null);
 
-    setTimeout(() => {
-      const order = saveNewOrder({
-        schoolName,
-        schoolType,
-        wilaya,
-        address,
-        directorName,
-        phone,
-        email,
-        studentCountEstimate: Number(studentCount) || plan.studentLimit,
-        planId: plan.id,
-        planName: plan.name,
-        billingCycle,
-        priceCentimes: currentPriceCentimes,
-        priceDzd: currentPriceDzd,
-        paymentMethod,
-        notes: notes || undefined
+    const result = await createOrderAsync({
+      schoolName,
+      schoolType,
+      wilaya,
+      address,
+      directorName,
+      phone,
+      email,
+      studentCountEstimate: Number(studentCount) || plan.studentLimit,
+      planId: plan.id,
+      planName: plan.name,
+      billingCycle,
+      priceCentimes: currentPriceCentimes,
+      priceDzd: currentPriceDzd,
+      paymentMethod,
+      adminUsername: adminUsername.trim() || undefined,
+      adminPassword: adminPassword.trim() || undefined,
+      notes: notes || undefined
+    });
+
+    setCreatedOrder(result.order);
+    setEmailStatus({
+      sent: result.emailSent,
+      messageId: result.emailMessageId,
+      error: result.emailError
+    });
+    onOrderCreated(result.order);
+    setIsSubmitting(false);
+
+    // Trigger celebratory confetti
+    try {
+      confetti({
+        particleCount: 80,
+        spread: 70,
+        origin: { y: 0.6 }
       });
-
-      setCreatedOrder(order);
-      onOrderCreated(order);
-      setIsSubmitting(false);
-
-      // Trigger celebratory confetti
-      try {
-        confetti({
-          particleCount: 80,
-          spread: 70,
-          origin: { y: 0.6 }
-        });
-      } catch (err) {
-        // Safe fallback
-      }
-    }, 600);
+    } catch (err) {
+      // Safe fallback
+    }
   };
 
   const copySchoolKey = (key: string) => {
@@ -146,20 +192,117 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
         {/* Modal Content */}
         {createdOrder ? (
           /* SUCCESS SCREEN */
-          <div className="p-6 sm:p-8 space-y-6">
+          <div className="p-6 sm:p-8 space-y-5">
             
-            <div className="text-center space-y-3">
-              <div className="w-16 h-16 rounded-full bg-emerald-500/20 border border-emerald-500/40 text-emerald-400 flex items-center justify-center mx-auto shadow-lg shadow-emerald-500/10">
-                <CheckCircle2 className="w-8 h-8" />
+            {/* Success Header */}
+            <div className="text-center space-y-2.5">
+              <div className="w-16 h-16 rounded-full bg-emerald-500/20 border-2 border-emerald-500/50 text-emerald-400 flex items-center justify-center mx-auto shadow-xl shadow-emerald-500/10 animate-bounce">
+                <CheckCircle2 className="w-9 h-9" />
+              </div>
+
+              <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 text-xs font-bold">
+                <Check className="w-3.5 h-3.5" />
+                <span>تم استلام طلبكم بنجاح</span>
               </div>
 
               <h4 className="text-xl sm:text-2xl font-black text-white">
-                تهانينا! تم تسجيل مدرسة "{createdOrder.schoolName}" بنجاح
+                تم بنجاح تقديم طلبك لمؤسسة "{createdOrder.schoolName}"
               </h4>
+            </div>
 
-              <p className="text-sm text-slate-300 max-w-lg mx-auto leading-relaxed">
-                تم تسجيل طلبكم وإرساله مباشرة إلى <span className="text-cyan-400 font-bold">لوحة التحكم المركزية (Redox Admin)</span>، وتم إرسال رسالة بريد إلكتروني فورية تتضمن مفتاح التفعيل وبيانات الدفع.
+            {/* "We will review your order" Notice Box */}
+            <div className="p-4 sm:p-5 rounded-2xl bg-gradient-to-br from-indigo-950/70 to-slate-950 border border-indigo-500/50 shadow-lg space-y-2 text-right">
+              <div className="flex items-center gap-2 text-indigo-300 font-bold text-sm sm:text-base">
+                <Eye className="w-5 h-5 text-indigo-400 shrink-0" />
+                <span>طلبك قيد المراجعة والدراسة الآن:</span>
+              </div>
+              <p className="text-xs sm:text-sm text-slate-300 leading-relaxed">
+                لقد تم إرسال طلبكم مباشرة إلى فريق إدارة <strong className="text-white">Redox Ta3limi</strong>. سنقوم بإلقاء نظرة على طلبكم ومراجعة بيانات مؤسستكم في أقرب وقت، وسيتصل بكم مستشارنا الفني هاتفياً أو عبر الواتساب لتأكيد تفعيل المنظومة وربط قارئات البطاقات الذكية RFID.
               </p>
+              <div className="flex items-center gap-2 pt-1 text-[11px] text-indigo-300/80 font-medium">
+                <Clock className="w-3.5 h-3.5" />
+                <span>متوسط وقت المراجعة والتواصل: خلال ساعات العمل الرسمية (08:00 - 18:00)</span>
+              </div>
+            </div>
+
+            {/* Email Confirmation Notice Box */}
+            <div className={`p-4 rounded-2xl border flex items-start gap-3 text-xs ${
+              emailStatus?.error && !emailStatus?.sent
+                ? 'bg-amber-950/40 border-amber-500/40 text-amber-200'
+                : 'bg-emerald-950/40 border-emerald-500/40 text-emerald-200'
+            }`}>
+              <Mail className="w-5 h-5 text-emerald-400 shrink-0 mt-0.5" />
+              <div className="leading-relaxed space-y-1.5 w-full">
+                <div className="flex items-center justify-between flex-wrap gap-1">
+                  <strong className="text-emerald-300 block font-bold text-xs sm:text-sm">
+                    {emailStatus?.error && !emailStatus?.sent 
+                      ? 'تم تسجيل طلبك وحفظه بنجاح (سيتم التواصل معك هاتفياً):'
+                      : 'تم بنجاح إرسال بريد إلكتروني رسمي يؤكد تقديم طلبك:'}
+                  </strong>
+                  {emailStatus?.messageId && (
+                    <span className="text-[10px] font-mono text-emerald-400/80 bg-emerald-950/80 px-2 py-0.5 rounded border border-emerald-500/30">
+                      ID: {emailStatus.messageId.replace(/[<>]/g, '').slice(0, 18)}...
+                    </span>
+                  )}
+                </div>
+
+                <p className="text-slate-200">
+                  أرسلنا تفاصيل الترخيص وبيانات الطلب والدفع إلى بريدكم: <strong className="font-mono text-white underline underline-offset-2">{createdOrder.email}</strong> من خلال <span className="text-cyan-300 font-mono">contact@rudeox.cloud</span>.
+                </p>
+
+                {/* Important Spam / Junk Alert & Actions */}
+                <div className="p-3 rounded-xl bg-slate-900/95 border border-amber-500/30 text-amber-200 text-[11px] leading-relaxed space-y-2 mt-1">
+                  <div className="flex items-start gap-2">
+                    <span className="text-amber-400 font-bold shrink-0">⚠️ أين تجد الرسالة؟</span>
+                    <span>
+                      إذا لم تجد الرسالة في <strong>صندوق الوارد الرئيسي (Inbox)</strong>، يرجى فحص مجلد <strong>الرسائل غير المرغوب فيها (Spam / Junk)</strong> أو قسم <strong>الترويجات (Promotions)</strong>، والنقر على <em>«ليس بريداً غير مرغوب فيه (Report Not Spam)»</em>.
+                    </span>
+                  </div>
+
+                  {/* Action Buttons for Email */}
+                  <div className="flex flex-wrap items-center gap-2 pt-1 border-t border-slate-800">
+                    <button
+                      type="button"
+                      onClick={handleResendEmail}
+                      disabled={isResendingEmail}
+                      className="px-3 py-1.5 rounded-lg bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 border border-emerald-500/40 text-[11px] font-bold flex items-center gap-1.5 cursor-pointer transition-all disabled:opacity-50"
+                    >
+                      <RefreshCw className={`w-3 h-3 ${isResendingEmail ? 'animate-spin' : ''}`} />
+                      <span>{isResendingEmail ? 'جارٍ إعادة الإرسال...' : 'إعادة إرسال رسالة التأكيد'}</span>
+                    </button>
+
+                    <a
+                      href={`https://mail.google.com/mail/u/0/#search/from%3Acontact%40rudeox.cloud+OR+rudeox`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="px-3 py-1.5 rounded-lg bg-indigo-500/20 hover:bg-indigo-500/30 text-indigo-300 border border-indigo-500/40 text-[11px] font-bold flex items-center gap-1.5 transition-all"
+                    >
+                      <ExternalLink className="w-3 h-3" />
+                      <span>البحث في Gmail عن الرسالة</span>
+                    </a>
+
+                    <a
+                      href={`https://wa.me/213559581957?text=${encodeURIComponent(`السلام عليكم، قمت بطلب باقة (${createdOrder.planName}) لمؤسسة (${createdOrder.schoolName}). مفتاح الترخيص: ${createdOrder.schoolKey}`)}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="px-3 py-1.5 rounded-lg bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-400 border border-emerald-600/40 text-[11px] font-bold flex items-center gap-1.5 transition-all"
+                    >
+                      <MessageSquare className="w-3 h-3" />
+                      <span>تأكيد الطلب فوراً عبر واتساب</span>
+                    </a>
+                  </div>
+
+                  {resendFeedback && (
+                    <div className={`p-2 rounded-lg text-[11px] font-medium ${
+                      resendFeedback.type === 'success' 
+                        ? 'bg-emerald-900/60 text-emerald-200 border border-emerald-500/40' 
+                        : 'bg-red-900/60 text-red-200 border border-red-500/40'
+                    }`}>
+                      {resendFeedback.text}
+                    </div>
+                  )}
+                </div>
+              </div>
             </div>
 
             {/* Generated School Key Box */}
@@ -227,14 +370,6 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
               </div>
             </div>
 
-            {/* Notice about email dispatch */}
-            <div className="p-3.5 rounded-xl bg-indigo-950/40 border border-indigo-500/40 flex items-center gap-3 text-xs text-slate-300">
-              <Mail className="w-5 h-5 text-cyan-400 shrink-0" />
-              <p className="leading-relaxed">
-                تم إرسال نسخة من مفتاح الترخيص وتفاصيل الحساب وتوجيهات الدفع تلقائياً إلى بريدكم: <strong className="font-mono text-cyan-300">{createdOrder.email}</strong> من خلال <span className="text-orange-400 font-mono">contact@rudeox.cloud</span>.
-              </p>
-            </div>
-
             {/* Actions */}
             <div className="pt-2 flex flex-col sm:flex-row items-center gap-3">
               <button
@@ -242,7 +377,7 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
                 className="w-full sm:w-1/2 py-3 px-4 rounded-xl bg-slate-800 hover:bg-slate-700 text-white font-bold text-xs sm:text-sm border border-slate-700 flex items-center justify-center gap-2 cursor-pointer transition-all"
               >
                 <Mail className="w-4 h-4 text-cyan-400" />
-                <span>معاينة نص الإشعار المرسل</span>
+                <span>معاينة نص الإشعار المرسل للبريد</span>
               </button>
 
               <button
@@ -441,6 +576,51 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
                 />
               </div>
 
+            </div>
+
+            {/* Optional Director Login Preferences */}
+            <div className="p-4 rounded-xl bg-slate-950/80 border border-slate-800 space-y-3">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <KeyRound className="w-4 h-4 text-cyan-400" />
+                  <span className="text-xs font-bold text-white">بيانات حساب المدير المفضل (اختياري)</span>
+                </div>
+                <span className="text-[10px] px-2 py-0.5 rounded-full bg-slate-800 text-slate-400 font-mono">
+                  اختياري - يولد تلقائياً إن ترك فارغاً
+                </span>
+              </div>
+              <p className="text-[11px] text-slate-400">
+                يمكنك تحديد اسم المستخدم وكلمة المرور المفضلة للدخول كمدير للمنظومة، أو تركها فارغة وسيقوم مشرف النظام بإنشائها وإرسالها لك فور قبول الطلب.
+              </p>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+                <div>
+                  <label className="block text-slate-300 font-medium mb-1">
+                    اسم مستخدم المدير (Username)
+                  </label>
+                  <input
+                    type="text"
+                    dir="ltr"
+                    value={adminUsername}
+                    onChange={(e) => setAdminUsername(e.target.value)}
+                    placeholder="مثال: admin_nokhba"
+                    className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-white placeholder-slate-600 focus:outline-none focus:border-cyan-500 font-mono text-xs"
+                  />
+                </div>
+                <div>
+                  <label className="block text-slate-300 font-medium mb-1">
+                    كلمة المرور المفضلة (Password)
+                  </label>
+                  <input
+                    type="text"
+                    dir="ltr"
+                    value={adminPassword}
+                    onChange={(e) => setAdminPassword(e.target.value)}
+                    placeholder="أدخل كلمة سر أو اتركها فارغة"
+                    className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-white placeholder-slate-600 focus:outline-none focus:border-cyan-500 font-mono text-xs"
+                  />
+                </div>
+              </div>
             </div>
 
             {/* Payment Method Selection */}

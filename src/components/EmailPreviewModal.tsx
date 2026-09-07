@@ -84,7 +84,7 @@ export const EmailPreviewModal: React.FC<EmailPreviewModalProps> = ({
           <div className="flex items-center gap-2">
             <span className="font-bold text-slate-300 w-16">الموضوع:</span>
             <span className="font-bold text-white">
-              تأكيد تسجيل واشتراك مدرسة "{order.schoolName}" - مفتاح التفعيل: {order.schoolKey}
+              تم بنجاح تقديم طلبك - سنقوم بمراجعته والتواصل معك [{order.schoolName}]
             </span>
           </div>
         </div>
@@ -103,8 +103,18 @@ export const EmailPreviewModal: React.FC<EmailPreviewModalProps> = ({
             </div>
 
             <span className="px-3 py-1 rounded-full text-[11px] font-bold bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">
-              إشعار تفعيل رسمي ✓
+              تم التقديم بنجاح ✓
             </span>
+          </div>
+
+          {/* Review In Progress Banner */}
+          <div className="p-3.5 rounded-xl bg-indigo-950/60 border border-indigo-500/40 text-indigo-200 text-xs space-y-1">
+            <strong className="text-white flex items-center gap-1.5 font-bold">
+              🔍 سنقوم بإلقاء نظرة على طلبكم ومراجعته:
+            </strong>
+            <p className="leading-relaxed">
+              فريقنا الإداري والتقني يقوم حالياً بدراسة ومراجعة بيانات مؤسستكم، وسيتصل بكم مستشارنا الفني هاتفياً أو عبر الواتساب في أقرب وقت لتأكيد التفعيل وتقديم الدعم الكامل لتشغيل المنظومة.
+            </p>
           </div>
 
           {/* Greeting */}
@@ -113,7 +123,7 @@ export const EmailPreviewModal: React.FC<EmailPreviewModalProps> = ({
               حضرة المدير الفاضل / {order.directorName} المحترم،
             </h4>
             <p className="text-slate-300 text-xs leading-relaxed">
-              يسعدنا في فريق <strong className="text-cyan-300">Redox Ta3limi</strong> أن نرحب بمؤسستكم التعليمية الموقرة <strong className="text-white">"{order.schoolName}"</strong> ضمن شبكة المدارس الذكية في الجزائر. لقد تم استلام طلب اشتراككم وتوليد مفتاح الربط والتفعيل الخاص بكم بنجاح.
+              نود إعلامكم وتأكيد أنه <strong className="text-emerald-400 font-bold">تم بنجاح تقديم طلبكم</strong> للاشتراك في منظومة Redox التعليمية لمؤسستكم الموقرة <strong className="text-white">"{order.schoolName}"</strong>.
             </p>
           </div>
 

@@ -95,6 +95,54 @@ export function saveNewOrder(orderData: Omit<SchoolOrder, 'id' | 'schoolKey' | '
   return newOrder;
 }
 
+export function saveNewOrderDirect(order: SchoolOrder): void {
+  const orders = getStoredOrders().filter(o => o.id !== order.id && o.schoolKey !== order.schoolKey);
+  const updated = [order, ...orders];
+  try {
+    localStorage.setItem(ORDERS_KEY, JSON.stringify(updated));
+  } catch (e) {
+    console.error('Failed to save to localStorage', e);
+  }
+}
+
+export async function createOrderAsync(orderData: Omit<SchoolOrder, 'id' | 'schoolKey' | 'createdAt' | 'status' | 'emailNotificationSent'>): Promise<{
+  order: SchoolOrder;
+  emailSent: boolean;
+  emailMessageId?: string;
+  emailError?: string;
+}> {
+  try {
+    const res = await fetch('/api/orders', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(orderData)
+    });
+
+    if (res.ok) {
+      const data = await res.json();
+      if (data.order) {
+        saveNewOrderDirect(data.order);
+        return {
+          order: data.order,
+          emailSent: data.emailSent ?? true,
+          emailMessageId: data.emailMessageId,
+          emailError: data.emailError
+        };
+      }
+    }
+  } catch (err) {
+    console.warn('[Sync] Server unreachable, falling back to local storage', err);
+  }
+
+  // Fallback
+  const fallbackOrder = saveNewOrder(orderData);
+  return {
+    order: fallbackOrder,
+    emailSent: false,
+    emailError: 'تم حفظ الطلب محلياً، في انتظار المزامنة مع الخادم'
+  };
+}
+
 export function updateOrderStatus(orderId: string, status: OrderStatus, notes?: string): SchoolOrder | null {
   const orders = getStoredOrders();
   const index = orders.findIndex(o => o.id === orderId);
@@ -125,6 +173,58 @@ export function updateOrderStatus(orderId: string, status: OrderStatus, notes?: 
   });
 
   return updatedOrder;
+}
+
+export async function approveOrderAsync(
+  orderId: string,
+  options?: {
+    adminUsername?: string;
+    adminPassword?: string;
+    targetServer?: string;
+    sendCredentialsEmail?: boolean;
+    planOverride?: string;
+  }
+): Promise<{
+  success: boolean;
+  message: string;
+  order?: SchoolOrder;
+  credentials?: {
+    schoolKey: string;
+    adminUsername: string;
+    adminPassword: string;
+    loginUrl: string;
+    schoolName: string;
+    directorName: string;
+  };
+  remote?: {
+    success: boolean;
+    message: string;
+    endpoint: string;
+    data?: any;
+  };
+  emailSent?: boolean;
+}> {
+  try {
+    const res = await fetch(`/api/orders/${encodeURIComponent(orderId)}/approve`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(options || {})
+    });
+    const data = await res.json();
+    if (res.ok && data.success && data.order) {
+      saveNewOrderDirect(data.order);
+      return data;
+    }
+    return data;
+  } catch (err: any) {
+    console.warn('[Sync] Failed to call approve API:', err);
+    const updated = updateOrderStatus(orderId, 'approved');
+    return {
+      success: true,
+      message: 'تم الاعتماد محلياً (تعذر الوصول للخادم)',
+      order: updated || undefined
+    };
+  }
 }
 
 export function regenerateOrderKey(orderId: string): string | null {

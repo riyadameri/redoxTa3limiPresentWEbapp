@@ -1,7 +1,16 @@
+import dotenv from 'dotenv';
+dotenv.config();
+dotenv.config({ path: '.env.example' });
+
 import express, { Request, Response } from 'express';
 import path from 'path';
 import { createServer as createViteServer } from 'vite';
-import { sendOrderNotificationEmail } from './emailService';
+import { 
+  sendOrderNotificationEmail, 
+  sendApprovalCredentialsEmail,
+  verifySmtpConnection, 
+  sendTestDiagnosticEmail 
+} from './emailService';
 import {
   initDatabase,
   isUsingMongo,
@@ -23,6 +32,7 @@ export interface ServerSchoolOrder {
   schoolName: string;
   schoolType: string;
   wilaya: string;
+  address?: string;
   directorName: string;
   phone: string;
   email: string;
@@ -32,12 +42,18 @@ export interface ServerSchoolOrder {
   billingCycle: 'monthly' | 'yearly';
   priceCentimes: string;
   priceDzd: number;
-  paymentMethod: 'baridimob' | 'ccp' | 'bank_transfer' | 'cash_office';
-  status: 'pending_payment' | 'paid' | 'active' | 'cancelled';
+  paymentMethod: string;
+  status: 'pending_payment' | 'pending' | 'approved' | 'active' | 'paid' | 'cancelled';
   createdAt: string;
   activatedAt?: string;
   emailNotificationSent: boolean;
   notes?: string;
+  adminUsername?: string;
+  adminPassword?: string;
+  provisionedAt?: string;
+  provisionedServer?: string;
+  remoteSchoolId?: string;
+  remoteProvisionStatus?: 'success' | 'remote_error' | 'skipped';
 }
 
 export interface ServerDemoRequest {
@@ -170,6 +186,7 @@ async function startServer() {
       schoolName,
       schoolType,
       wilaya,
+      address,
       directorName,
       phone,
       email,
@@ -180,6 +197,8 @@ async function startServer() {
       priceCentimes,
       priceDzd,
       paymentMethod,
+      adminUsername,
+      adminPassword,
       notes
     } = req.body;
 
@@ -200,6 +219,7 @@ async function startServer() {
       schoolName,
       schoolType: schoolType || 'مدرسة خاصة',
       wilaya,
+      address: address || '',
       directorName,
       phone,
       email: email || '',
@@ -213,30 +233,57 @@ async function startServer() {
       status: 'pending_payment',
       createdAt: now,
       emailNotificationSent: true,
-      notes: notes || ''
+      notes: notes || '',
+      adminUsername: adminUsername || '',
+      adminPassword: adminPassword || ''
     };
 
     // Save to database (MongoDB / fallback)
     await insertOrder(newOrder);
 
-    // Asynchronously send confirmation email via Hostinger SMTP
+    // Send confirmation email via Hostinger SMTP
+    let emailStatus: { success: boolean; messageId?: string; response?: string; error?: string } = {
+      success: false
+    };
+
     if (newOrder.email) {
-      sendOrderNotificationEmail(newOrder).then((result) => {
-        if (result.success) {
-          console.log(`[Email] Customer order notification email delivered to ${newOrder.email} (MessageId: ${result.messageId})`);
+      try {
+        emailStatus = await sendOrderNotificationEmail(newOrder);
+        if (emailStatus.success) {
+          console.log(`[Email] Customer order notification email delivered to ${newOrder.email} (MessageId: ${emailStatus.messageId})`);
         } else {
-          console.warn(`[Email] Could not send email to ${newOrder.email}:`, result.error);
+          console.warn(`[Email] Could not send email to ${newOrder.email}:`, emailStatus.error);
         }
-      }).catch((err) => {
-        console.error('[Email] Unexpected error in async email dispatcher:', err);
-      });
+      } catch (err: any) {
+        console.error('[Email] Unexpected error in email dispatcher:', err);
+        emailStatus = { success: false, error: err?.message };
+      }
     }
 
     res.status(201).json({
       success: true,
-      message: 'تم تسجيل طلب الاشتراك وتوليد المفتاح بنجاح وحفظه في قاعدة البيانات وإرسال رسالة التأكيد عبر البريد الإلكتروني',
-      order: newOrder
+      message: emailStatus.success
+        ? 'تم تسجيل طلب الاشتراك وتوليد المفتاح وإرسال رسالة التأكيد عبر البريد الإلكتروني بنجاح'
+        : 'تم تسجيل طلب الاشتراك وتوليد المفتاح بنجاح وحفظه في قاعدة البيانات',
+      order: newOrder,
+      emailSent: emailStatus.success,
+      emailMessageId: emailStatus.messageId,
+      emailResponse: emailStatus.response,
+      emailError: emailStatus.error
     });
+  });
+
+  // SMTP Email Health & Diagnostic endpoints
+  app.get('/api/email/status', async (req: Request, res: Response) => {
+    const status = await verifySmtpConnection();
+    res.json(status);
+  });
+
+  app.post('/api/email/test', async (req: Request, res: Response) => {
+    const { toEmail } = req.body;
+    const target = toEmail || 'contact@rudeox.cloud';
+    const result = await sendTestDiagnosticEmail(target);
+    res.json(result);
   });
 
   // POST send / resend email notification for an order
@@ -255,7 +302,8 @@ async function startServer() {
       res.json({
         success: true,
         message: `تم إرسال البريد الإلكتروني بنجاح إلى ${order.email}`,
-        messageId: emailResult.messageId
+        messageId: emailResult.messageId,
+        response: emailResult.response
       });
     } else {
       res.status(500).json({
@@ -263,6 +311,180 @@ async function startServer() {
         message: `فشل إرسال البريد الإلكتروني: ${emailResult.error}`
       });
     }
+  });
+
+  // 4. APPROVE ORDER & PROVISION SCHOOL AT ALROUAD.COM
+  app.post('/api/orders/:id/approve', async (req: Request, res: Response) => {
+    const current = await getOrderById(req.params.id);
+
+    if (!current) {
+      return res.status(404).json({ success: false, message: 'الطلب غير موجود' });
+    }
+
+    const {
+      adminUsername: customUsername,
+      adminPassword: customPassword,
+      targetServer = process.env.ALROUAD_API_URL || 'https://alrouad.com',
+      sendCredentialsEmail = true,
+      planOverride,
+      subscriptionDurationOverride
+    } = req.body;
+
+    // Generate credentials if not provided
+    const cleanKeyPart = current.schoolKey ? current.schoolKey.replace(/[^a-zA-Z0-9]/g, '').slice(-5).toLowerCase() : 'sch';
+    const adminUsername = customUsername || current.adminUsername || `admin_${cleanKeyPart}`;
+    const adminPassword = customPassword || current.adminPassword || `Rdx${Math.floor(1000 + Math.random() * 9000)}!#`;
+
+    // Map plan to alrouad enum ['basic', 'standard', 'premium', 'enterprise', 'trial']
+    let plan = planOverride || 'standard';
+    if (!planOverride) {
+      const planStr = ((current.planId || '') + ' ' + (current.planName || '')).toLowerCase();
+      if (planStr.includes('1') || planStr.includes('basic') || planStr.includes('أول') || planStr.includes('اول')) {
+        plan = 'basic';
+      } else if (planStr.includes('2') || planStr.includes('standard') || planStr.includes('ثاني')) {
+        plan = 'standard';
+      } else if (planStr.includes('3') || planStr.includes('premium') || planStr.includes('ثالث')) {
+        plan = 'premium';
+      } else if (planStr.includes('4') || planStr.includes('enterprise') || planStr.includes('رابع')) {
+        plan = 'enterprise';
+      }
+    }
+
+    const subscriptionDuration = subscriptionDurationOverride 
+      ? Number(subscriptionDurationOverride) 
+      : (current.billingCycle === 'yearly' ? 12 : 1);
+
+    const alrouadServerUrl = (targetServer || 'https://alrouad.com').replace(/\/+$/, '');
+    const alrouadEndpoint = `${alrouadServerUrl}/api/redox-admin/school`;
+
+    const alrouadPayload = {
+      name: current.schoolName,
+      email: current.email || `${adminUsername}@alrouad.com`,
+      phone: current.phone,
+      address: current.address || current.wilaya,
+      key: current.schoolKey,
+      adminUsername,
+      adminPassword,
+      adminFullName: current.directorName,
+      adminEmail: current.email || `${adminUsername}@alrouad.com`,
+      adminPhone: current.phone,
+      plan,
+      subscriptionDuration,
+      subscriptionAmount: current.priceDzd || 0
+    };
+
+    console.log(`[Provisioning] Connecting to alrouad.com at ${alrouadEndpoint} for school: ${current.schoolName}...`);
+
+    let remoteResult: {
+      success: boolean;
+      message: string;
+      endpoint: string;
+      data?: any;
+    } = {
+      success: false,
+      message: 'لم يتم الاتصال',
+      endpoint: alrouadEndpoint
+    };
+
+    try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 7000);
+
+      const remoteRes = await fetch(alrouadEndpoint, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Accept': 'application/json'
+        },
+        body: JSON.stringify(alrouadPayload),
+        signal: controller.signal
+      });
+      clearTimeout(timeoutId);
+
+      const resText = await remoteRes.text();
+      let resJson: any = null;
+      try {
+        resJson = JSON.parse(resText);
+      } catch {
+        resJson = { rawResponse: resText.slice(0, 300) };
+      }
+
+      if (remoteRes.ok) {
+        remoteResult = {
+          success: true,
+          message: resJson.message || 'تم ربط المدرسة وإنشاء حساب المدير على سيرفر alrouad.com بنجاح ✓',
+          endpoint: alrouadEndpoint,
+          data: resJson
+        };
+        console.log(`[Provisioning] Successfully provisioned on alrouad.com:`, resJson);
+      } else {
+        remoteResult = {
+          success: false,
+          message: resJson?.message || `رد خادم alrouad.com برمز (${remoteRes.status})`,
+          endpoint: alrouadEndpoint,
+          data: resJson
+        };
+        console.warn(`[Provisioning] alrouad.com responded with non-200:`, remoteRes.status, resJson);
+      }
+    } catch (remoteErr: any) {
+      const isTimeout = remoteErr.name === 'AbortError';
+      remoteResult = {
+        success: false,
+        message: isTimeout 
+          ? 'انتهت مهلة استجابة سيرفر alrouad.com (تجاوز 7 ثوانٍ)' 
+          : (remoteErr.message || 'تعذر الوصول إلى سيرفر alrouad.com'),
+        endpoint: alrouadEndpoint
+      };
+      console.warn(`[Provisioning] Error calling alrouad.com:`, remoteResult.message);
+    }
+
+    const now = new Date().toISOString().replace('T', ' ').slice(0, 16);
+    const updatedOrder = await updateOrder(current.id, {
+      status: 'approved',
+      activatedAt: current.activatedAt || now,
+      adminUsername,
+      adminPassword,
+      provisionedAt: now,
+      provisionedServer: alrouadServerUrl,
+      remoteSchoolId: remoteResult.data?.school?._id || remoteResult.data?.school?.id || remoteResult.data?._id,
+      remoteProvisionStatus: remoteResult.success ? 'success' : 'remote_error'
+    });
+
+    // Send credentials email via Hostinger SMTP
+    let emailStatus: { success: boolean; messageId?: string; response?: string; error?: string } = {
+      success: false
+    };
+
+    if (sendCredentialsEmail && current.email) {
+      try {
+        emailStatus = await sendApprovalCredentialsEmail(updatedOrder || current, {
+          username: adminUsername,
+          password: adminPassword,
+          loginUrl: `${alrouadServerUrl}/login`,
+          remoteServerUrl: alrouadServerUrl
+        });
+      } catch (err: any) {
+        console.error('[Email] Approval email sending error:', err);
+        emailStatus = { success: false, error: err?.message };
+      }
+    }
+
+    res.json({
+      success: true,
+      message: 'تمت الموافقة على طلب المدرسة واعتماد الحساب بنجاح',
+      order: updatedOrder,
+      credentials: {
+        schoolKey: current.schoolKey,
+        adminUsername,
+        adminPassword,
+        loginUrl: `${alrouadServerUrl}/login`,
+        schoolName: current.schoolName,
+        directorName: current.directorName
+      },
+      remote: remoteResult,
+      emailSent: emailStatus.success,
+      emailStatus
+    });
   });
 
   // PUT / PATCH update order status
@@ -277,7 +499,7 @@ async function startServer() {
     const now = new Date().toISOString().replace('T', ' ').slice(0, 16);
     const updated = await updateOrder(req.params.id, {
       status: status || current.status,
-      activatedAt: status === 'active' ? (current.activatedAt || now) : current.activatedAt,
+      activatedAt: (status === 'active' || status === 'approved') ? (current.activatedAt || now) : current.activatedAt,
       notes: notes !== undefined ? notes : current.notes
     });
 

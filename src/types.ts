@@ -14,7 +14,7 @@ export interface Plan {
   description: string;
 }
 
-export type OrderStatus = 'pending_payment' | 'paid' | 'active' | 'cancelled';
+export type OrderStatus = 'pending_payment' | 'pending' | 'approved' | 'active' | 'paid' | 'cancelled';
 export type PaymentMethod = 'baridimob' | 'ccp' | 'bank_transfer' | 'cash';
 export type SchoolType = 'مدرسة خاصة' | 'مركز دروس دعم' | 'معهد لغات' | 'مدرسة قرآنية' | 'مؤسسة تكوينية' | 'أخرى';
 
@@ -40,6 +40,13 @@ export interface SchoolOrder {
   activatedAt?: string;
   notes?: string;
   emailNotificationSent: boolean;
+  // Director Credentials & Provisioning
+  adminUsername?: string;
+  adminPassword?: string;
+  provisionedAt?: string;
+  provisionedServer?: string;
+  remoteSchoolId?: string;
+  remoteProvisionStatus?: 'success' | 'remote_error' | 'skipped';
 }
 
 export interface DemoRequest {
